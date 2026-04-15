@@ -9,24 +9,35 @@ let initialized = false;
 
 export async function initDb() {
   if (initialized) return;
-  await db.execute(`
-    CREATE TABLE IF NOT EXISTS user_links (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      steam_id TEXT UNIQUE,
-      steam_persona TEXT,
-      steam_avatar TEXT,
-      twitch_id TEXT UNIQUE,
-      twitch_login TEXT,
-      twitch_display_name TEXT,
-      twitch_email TEXT,
-      twitch_access_token TEXT,
-      twitch_refresh_token TEXT,
-      twitch_token_expires_at INTEGER,
-      drops_enabled INTEGER DEFAULT 0,
-      created_at INTEGER DEFAULT (unixepoch()),
-      updated_at INTEGER DEFAULT (unixepoch())
-    )
-  `);
+  await db.batch(
+    [
+      `CREATE TABLE IF NOT EXISTS user_links (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        steam_id TEXT,
+        steam_persona TEXT,
+        steam_avatar TEXT,
+        twitch_id TEXT,
+        twitch_login TEXT,
+        twitch_display_name TEXT,
+        twitch_email TEXT,
+        twitch_avatar TEXT,
+        twitch_access_token TEXT,
+        twitch_refresh_token TEXT,
+        twitch_token_expires_at INTEGER,
+        drops_enabled INTEGER DEFAULT 0,
+        created_at INTEGER DEFAULT (unixepoch()),
+        updated_at INTEGER DEFAULT (unixepoch()),
+        deleted_at INTEGER
+      )`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_user_links_steam_id_active
+        ON user_links(steam_id)
+        WHERE deleted_at IS NULL AND steam_id IS NOT NULL`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_user_links_twitch_id_active
+        ON user_links(twitch_id)
+        WHERE deleted_at IS NULL AND twitch_id IS NOT NULL`,
+    ],
+    "write",
+  );
   initialized = true;
 }
 
@@ -39,34 +50,37 @@ export type UserLink = {
   twitch_login: string | null;
   twitch_display_name: string | null;
   twitch_email: string | null;
+  twitch_avatar: string | null;
   drops_enabled: number;
 };
 
+async function queryOne(sql: string, args: (string | number)[]) {
+  const r = await db.execute({ sql, args });
+  return (r.rows[0] as unknown as UserLink) ?? null;
+}
+
 export async function getLinkBySteamId(steamId: string) {
   await initDb();
-  const r = await db.execute({
-    sql: "SELECT * FROM user_links WHERE steam_id = ?",
-    args: [steamId],
-  });
-  return (r.rows[0] as unknown as UserLink) ?? null;
+  return queryOne(
+    "SELECT * FROM user_links WHERE steam_id = ? AND deleted_at IS NULL",
+    [steamId],
+  );
 }
 
 export async function getLinkByTwitchId(twitchId: string) {
   await initDb();
-  const r = await db.execute({
-    sql: "SELECT * FROM user_links WHERE twitch_id = ?",
-    args: [twitchId],
-  });
-  return (r.rows[0] as unknown as UserLink) ?? null;
+  return queryOne(
+    "SELECT * FROM user_links WHERE twitch_id = ? AND deleted_at IS NULL",
+    [twitchId],
+  );
 }
 
 export async function getLinkById(id: number) {
   await initDb();
-  const r = await db.execute({
-    sql: "SELECT * FROM user_links WHERE id = ?",
-    args: [id],
-  });
-  return (r.rows[0] as unknown as UserLink) ?? null;
+  return queryOne(
+    "SELECT * FROM user_links WHERE id = ? AND deleted_at IS NULL",
+    [id],
+  );
 }
 
 export async function upsertSteam(
@@ -108,6 +122,7 @@ export async function upsertTwitch(
     login: string;
     display_name: string;
     email: string | null;
+    avatar: string | null;
     access_token: string;
     refresh_token: string;
     expires_at: number;
@@ -117,13 +132,14 @@ export async function upsertTwitch(
   const existing = await getLinkByTwitchId(twitch.id);
   if (existing) {
     await db.execute({
-      sql: `UPDATE user_links SET twitch_login=?, twitch_display_name=?, twitch_email=?,
+      sql: `UPDATE user_links SET twitch_login=?, twitch_display_name=?, twitch_email=?, twitch_avatar=?,
               twitch_access_token=?, twitch_refresh_token=?, twitch_token_expires_at=?,
               updated_at=unixepoch() WHERE id=?`,
       args: [
         twitch.login,
         twitch.display_name,
         twitch.email,
+        twitch.avatar,
         twitch.access_token,
         twitch.refresh_token,
         twitch.expires_at,
@@ -136,7 +152,7 @@ export async function upsertTwitch(
     const row = await getLinkById(sessionRowId);
     if (row && !row.twitch_id) {
       await db.execute({
-        sql: `UPDATE user_links SET twitch_id=?, twitch_login=?, twitch_display_name=?, twitch_email=?,
+        sql: `UPDATE user_links SET twitch_id=?, twitch_login=?, twitch_display_name=?, twitch_email=?, twitch_avatar=?,
                 twitch_access_token=?, twitch_refresh_token=?, twitch_token_expires_at=?,
                 updated_at=unixepoch() WHERE id=?`,
         args: [
@@ -144,6 +160,7 @@ export async function upsertTwitch(
           twitch.login,
           twitch.display_name,
           twitch.email,
+          twitch.avatar,
           twitch.access_token,
           twitch.refresh_token,
           twitch.expires_at,
@@ -154,14 +171,15 @@ export async function upsertTwitch(
     }
   }
   const r = await db.execute({
-    sql: `INSERT INTO user_links (twitch_id, twitch_login, twitch_display_name, twitch_email,
+    sql: `INSERT INTO user_links (twitch_id, twitch_login, twitch_display_name, twitch_email, twitch_avatar,
             twitch_access_token, twitch_refresh_token, twitch_token_expires_at)
-          VALUES (?,?,?,?,?,?,?)`,
+          VALUES (?,?,?,?,?,?,?,?)`,
     args: [
       twitch.id,
       twitch.login,
       twitch.display_name,
       twitch.email,
+      twitch.avatar,
       twitch.access_token,
       twitch.refresh_token,
       twitch.expires_at,
@@ -174,6 +192,14 @@ export async function enableDrops(rowId: number) {
   await initDb();
   await db.execute({
     sql: `UPDATE user_links SET drops_enabled=1, updated_at=unixepoch() WHERE id=?`,
+    args: [rowId],
+  });
+}
+
+export async function softDeleteLink(rowId: number) {
+  await initDb();
+  await db.execute({
+    sql: `UPDATE user_links SET deleted_at=unixepoch(), updated_at=unixepoch() WHERE id=? AND deleted_at IS NULL`,
     args: [rowId],
   });
 }

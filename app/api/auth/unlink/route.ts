@@ -6,7 +6,7 @@ export async function POST() {
   const session = await readSession();
   if (session) await softDeleteLink(session.sid);
 
-  const res = NextResponse.redirect(`${process.env.APP_URL}/`, 302);
+  const res = NextResponse.redirect(`${process.env.APP_URL}/connect`, 302);
   clearSessionCookie(res);
   return res;
 }

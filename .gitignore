@@ -8,3 +8,4 @@ build/
 .env.*.local
 .DS_Store
 _ref/
+scripts/extract-page.md
