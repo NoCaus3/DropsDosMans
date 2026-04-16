@@ -9,3 +9,5 @@ build/
 .DS_Store
 _ref/
 scripts/extract-page.md
+
+.vercel
