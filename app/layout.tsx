@@ -29,6 +29,7 @@ export default function RootLayout({
           rel="stylesheet"
           href="https://cdn.jsdelivr.net/npm/@mdi/font@7.2.96/css/materialdesignicons.min.css"
         />
+        <script src="/scripts.js" />
       </head>
       <body>{children}</body>
     </html>

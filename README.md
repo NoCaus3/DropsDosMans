@@ -19,7 +19,16 @@ A premiação por tempo assistido é a parte interessante: a pessoa não precisa
 - (Próximo passo) Conforme assiste live(s) participantes, acumula tempo
 - (Próximo passo) Atingiu X minutos → drop liberado pra resgatar
 
-A parte de **tracking de tempo assistido** ainda não está implementada — só o fluxo de pareamento de contas e a UI espelhada do site original. Esse é o próximo passo (provavelmente heartbeat no embed do player + EventSub do chat pra confirmar presença).
+A parte de **tracking de tempo assistido** ainda não está implementada — só o fluxo de pareamento de contas, a UI espelhada do site original e o sistema de campanhas. Esse é o próximo passo (provavelmente heartbeat no embed do player + EventSub do chat pra confirmar presença).
+
+## Home com campanha ativa vs. sem campanha
+
+A home é renderizada a partir do banco:
+
+- **Sem campanha ativa** → título `Drops dos Mans` + bloco `How it Works` guiando o usuário pra parear
+- **Com campanha ativa** (`end_at > now` e `deleted_at IS NULL`) → `hero-image` + bloco `.campaign-0` com `Round N`, nome, badge `Event Live` quando `now >= start_at`, `event-date` com as datas formatadas em UTC (o script inline sobrescreve com o locale do navegador), countdown ao vivo via `setupCountdown` do `scripts.js` e a section `General Drops` listando os drops cadastrados
+
+Pra alternar entre os dois modos, use o CLI de campanha (seção Scripts abaixo).
 
 ## Estados do `/connect`
 
@@ -54,15 +63,13 @@ Sessão é um JWT HS256 com TTL 30 dias contendo só o `sid` (id da row em `user
 
 ## Banco
 
-Tabela única `user_links` com **soft delete** (`deleted_at` nullable) e índices únicos parciais:
+Três tabelas, todas com **soft delete** onde faz sentido (`deleted_at` nullable) e índices únicos parciais filtrando `WHERE deleted_at IS NULL`:
 
-```sql
-CREATE UNIQUE INDEX idx_user_links_steam_id_active
-  ON user_links(steam_id)
-  WHERE deleted_at IS NULL AND steam_id IS NOT NULL;
-```
+- `user_links` — pareamento Steam↔Twitch, tokens, flag `drops_enabled`
+- `campaigns` — `slug`, `round_number`, `name`, `hero_image_url`, `start_at`, `end_at` (unix seconds)
+- `campaign_drops` — `campaign_id` (FK cascade), `position`, `drop_type`, `required_hours`, `item_id`, `video_url`, `image_url`, `claimed_count`
 
-Isso permite que um mesmo `steam_id`/`twitch_id` apareça várias vezes ao longo do tempo (cada logout cria uma row "histórica"), desde que só uma esteja ativa.
+Os índices parciais permitem que um mesmo `steam_id`/`twitch_id`/`slug` reapareça depois de um soft-delete sem quebrar unicidade.
 
 ## Rodando localmente
 
@@ -90,7 +97,7 @@ APP_URL=http://localhost:3000
 
 No painel do Twitch, cadastre `http://localhost:3000/signin-twitch` como **OAuth Redirect URL** (sem trailing slash).
 
-A tabela do banco é criada na primeira request. Pra criar/verificar manualmente:
+As tabelas são criadas na primeira request. Pra criar/verificar manualmente:
 
 ```bash
 npm run db:init
@@ -103,9 +110,29 @@ npm run db:init
 | `npm run dev` | Next dev server |
 | `npm run build` | Build produção |
 | `npm run typecheck` | `tsc --noEmit`, valida tipos sem tocar no `.next/` |
-| `npm run db:init` | Cria tabela + índices se não existirem |
+| `npm run db:init` | Cria tabelas + índices se não existirem |
+| `npm run campaign list` | Lista campanhas e status (LIVE / UPCOMING / ENDED / DELETED) |
+| `npm run campaign activate <slug>` | Reativa uma campanha (limpa `deleted_at`) |
+| `npm run campaign deactivate <slug>` | Soft-delete — a home volta pro estado sem evento |
+| `npm run campaign seed-example` | Cria/atualiza uma campanha demo com 4 drops populados |
 
 > Heads up: **não rode `npm run build` enquanto `npm run dev` estiver ativo**. Os dois compartilham `.next/`, e o build sobrescreve assets que o dev tá servindo, fazendo o CSS perder formatação até reiniciar o server. Pra validar mudanças use `npm run typecheck` ou só confie no hot reload.
+
+### Criando uma campanha própria
+
+Mais simples é via SQL direto no Turso (ou adapte o `seed-example` pros seus dados):
+
+```sql
+INSERT INTO campaigns (slug, round_number, name, hero_image_url, start_at, end_at)
+VALUES ('round-1', 1, 'Nome do Evento', 'https://.../hero.png', 1777000000, 1778000000);
+
+INSERT INTO campaign_drops (campaign_id, position, drop_type, required_hours, item_id, video_url, image_url)
+VALUES
+  (1, 1, 'Caixa Bronze', 2, 'item-1', 'https://.../drop1.mp4', 'https://.../drop1.jpg'),
+  (1, 2, 'Caixa Prata',  4, 'item-2', 'https://.../drop2.mp4', 'https://.../drop2.jpg');
+```
+
+`start_at` e `end_at` são unix timestamps em **segundos**.
 
 ## Estrutura
 
@@ -121,26 +148,29 @@ app/
   signin-steam/    # callback OpenID
   signin-twitch/   # callback OAuth
   connect/         # página de pareamento
-  page.tsx         # home
-components/        # Header, Hero, FAQ, Pair, Footer
+  page.tsx         # home (consulta campanha ativa)
+components/        # Header, Hero, DropsList, FAQ, Pair, Footer
 lib/
-  db.ts            # cliente Turso + queries
+  db.ts            # cliente Turso + schema + queries de user_links
+  campaigns.ts     # queries de campaigns + campaign_drops
   session.ts       # JWT + cookies
   steam.ts         # buildLoginUrl, verifyOpenIdResponse, fetchProfile
   twitch.ts        # buildAuthUrl, exchangeCode, fetchUser, refreshToken
+public/
+  scripts.js       # setupCountdown + polling dos drop counters (servido em /scripts.js)
 scripts/
-  init-db.mjs              # cria schema
-  inspect-user.mjs         # dump da DB
-  refresh-twitch-avatars.mjs # popula avatares ausentes
+  init-db.mjs      # cria schema
+  campaign.mjs     # CLI de campanha (list/activate/deactivate/seed-example)
 ```
 
 ## Roadmap
 
-- [x] Clone visual da página `/`
+- [x] Clone visual da página `/` (com e sem campanha ativa)
 - [x] Clone visual da página `/connect` (5 estados)
 - [x] Pareamento Steam ↔ Twitch com soft delete
+- [x] Campanhas + drops no banco, CLI pra toggle
 - [ ] Tracking de tempo assistido (heartbeat no embed + chat presence via EventSub)
-- [ ] Painel pro streamer criar campanha (cadastrar drop, definir tempo mínimo, escolher canal)
+- [ ] Painel pro streamer criar campanha pela UI (hoje é SQL direto)
 - [ ] Distribuição automática dos prêmios via Steam Trade
 - [ ] Página de inventário do usuário
 - [ ] Implementar `/api/auth/refresh-drops` de verdade (atualmente stub)

@@ -52,24 +52,47 @@ await db.batch(
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_user_links_twitch_id_active
       ON user_links(twitch_id)
       WHERE deleted_at IS NULL AND twitch_id IS NOT NULL`,
+    `CREATE TABLE IF NOT EXISTS campaigns (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT NOT NULL,
+      round_number INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      hero_image_url TEXT,
+      start_at INTEGER NOT NULL,
+      end_at INTEGER NOT NULL,
+      created_at INTEGER DEFAULT (unixepoch()),
+      updated_at INTEGER DEFAULT (unixepoch()),
+      deleted_at INTEGER
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_campaigns_slug_active
+      ON campaigns(slug)
+      WHERE deleted_at IS NULL`,
+    `CREATE TABLE IF NOT EXISTS campaign_drops (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      campaign_id INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL,
+      drop_type TEXT NOT NULL,
+      required_hours INTEGER NOT NULL,
+      item_id TEXT,
+      video_url TEXT,
+      image_url TEXT,
+      claimed_count INTEGER DEFAULT 0,
+      created_at INTEGER DEFAULT (unixepoch())
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_campaign_drops_campaign
+      ON campaign_drops(campaign_id, position)`,
   ],
   "write",
 );
 
-console.log("✓ Table user_links + partial unique indexes ready");
+console.log("✓ Schema ready (user_links, campaigns, campaign_drops)");
 
 const tables = await db.execute(
   "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
 );
 console.log("→ Tables:", tables.rows.map((r) => r.name).join(", "));
 
-const columns = await db.execute("PRAGMA table_info(user_links)");
-console.log("→ Columns:");
-for (const r of columns.rows) {
-  console.log(`  - ${r.name} (${r.type})${r.pk ? " PK" : ""}`);
-}
-
 const indexes = await db.execute(
-  "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='user_links' ORDER BY name",
+  "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%' ORDER BY name",
 );
 console.log("→ Indexes:", indexes.rows.map((r) => r.name).join(", "));
