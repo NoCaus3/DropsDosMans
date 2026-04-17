@@ -7,8 +7,6 @@ export default async function Header({ active = "drops" }: { active?: Active }) 
   const session = await readSession();
   const link = session ? await getLinkById(session.sid) : null;
   const avatar = link?.twitch_avatar ?? link?.steam_avatar ?? null;
-  const dropsEnabled = !!link?.drops_enabled;
-  const connectActive = active === "connect" && !dropsEnabled;
 
   return (
     <div className="header">
@@ -20,13 +18,17 @@ export default async function Header({ active = "drops" }: { active?: Active }) 
       </a>
       <div className="navigation">
         <a
-          className={active === "drops" ? "is-active is-active-exact" : ""}
+          className={
+            active === "drops" ? "is-active is-active-exact" : undefined
+          }
           href="/#drops"
         >
           Twitch Drops
         </a>
         <a
-          className={connectActive ? "is-active is-active-exact" : ""}
+          className={
+            active === "connect" ? "is-active is-active-exact" : undefined
+          }
           href="/connect"
         >
           Connect Account
@@ -34,7 +36,6 @@ export default async function Header({ active = "drops" }: { active?: Active }) 
         <a
           href="https://store.steampowered.com/app/252490?utm_source=w_campaign=ncsts"
           target="_blank"
-          rel="noreferrer"
           className="buy"
         >
           <i className="mdi mdi-steam" />
